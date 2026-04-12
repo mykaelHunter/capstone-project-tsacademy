@@ -46,6 +46,8 @@ The backend Dockerfile implements a multi-stage build:
 
 #### Build Frontend Image
 
+- Ensure you have edited the `VITE_API_URL` environment variable to match your domain name
+
 ```bash
 cd src/taskapp_frontend
 docker build -t <your-registry>/taskapp-frontend:<version> .

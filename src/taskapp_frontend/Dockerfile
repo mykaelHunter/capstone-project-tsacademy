@@ -13,7 +13,7 @@ RUN npm ci --frozen-lockfile
 # Copy source code
 COPY . .
 
-ENV VITE_API_URL=https://api.terra-hunter.com/api
+ENV VITE_API_URL=https://api.<your-domain>/api
 
 # Build App
 RUN npm run build
