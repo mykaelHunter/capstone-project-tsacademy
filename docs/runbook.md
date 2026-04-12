@@ -7,6 +7,7 @@ This runbook provides a step-by-step operational procedure for deploying and tea
 ## Prerequisites
 
 - AWS CLI configured with sufficient IAM permissions
+- `docker` installed with all dependencies
 - `terraform` installed and available on `PATH`
 - `kubectl` installed and configured for kOps
 - `kops` installed and available on `PATH`
@@ -25,7 +26,39 @@ All deployment scripts are located in the `scripts/` directory. Run them from th
 
 Follow this order exactly. Each step depends on the previous step's output.
 
-### 1. Optional: IAM setup for kOps
+### 2. Build and push container images
+
+Files: `src/taskapp_backend/Dockerfile` and `src/taskapp_frontend/Dockerfile`
+
+Before provisioning infrastructure, build Docker images from the application source and push them to a container registry:
+
+#### Build Backend Image
+
+```bash
+cd src/taskapp_backend
+docker build -t <your-registry>/taskapp-backend:<version> .
+docker push <your-registry>/taskapp-backend:<version>
+```
+
+The backend Dockerfile implements a multi-stage build:
+- **Stage 1 (Builder)**: Compiles Python dependencies on `python:3.11-alpine` with build tools
+- **Stage 2 (Runtime)**: Slim image with only runtime dependencies and application code, runs as non-privileged user
+
+#### Build Frontend Image
+
+```bash
+cd src/taskapp_frontend
+docker build -t <your-registry>/taskapp-frontend:<version> .
+docker push <your-registry>/taskapp-frontend:<version>
+```
+
+The frontend Dockerfile implements a two-stage build:
+- **Stage 1 (Builder)**: Builds the Vite React TypeScript application on `node:24-alpine`
+- **Stage 2 (Runtime)**: Serves built assets via `nginx:alpine`
+
+After pushing images, note the full image URIs. You will reference them when running `scripts/kubernetes.sh`.
+
+### 2. Optional: IAM setup for kOps
 
 File: `scripts/iam-kops.sh`
 
@@ -38,7 +71,7 @@ cd scripts
 
 This script creates a `kops` IAM group and attaches the required AWS policies for kOps to manage EC2, VPC, S3, Route53, IAM, and related services.
 
-### 2. Provision core AWS infrastructure
+### 3. Provision core AWS infrastructure
 
 File: `scripts/terraform-setup.sh`
 
@@ -58,7 +91,7 @@ cd scripts
 
 - If Terraform prompts for variable values, provide them or create a `terraform.tfvars` file in `terraform/root/`.
 
-### 3. Configure kOps cluster
+### 4. Configure kOps cluster
 
 File: `scripts/kops-setup.sh`
 
@@ -80,7 +113,7 @@ cd scripts
 - The script generates `kops/cluster-config.yaml` and may open it for manual review.
 - Add the maxPrice variable to configure worker nodes as spot instances
 
-### 4. Create the kOps cluster
+### 5. Create the kOps cluster
 
 File: `scripts/kops-start.sh`
 
@@ -102,7 +135,30 @@ kubectl get nodes -o wide
 kops validate cluster --wait 15m
 ```
 
-### 5. Provision the database
+### 6. Optional: Configure cluster nodes with Ansible
+
+File: `ansible/playbooks/site.yml`
+
+After the kOps cluster is running and validated, use Ansible to apply base system configuration to all nodes:
+
+- Update `ansible/inventory/prod.yml` with the private IP addresses of your cluster nodes:
+  - Replace `<control-node-1-private-ip>`, `<control-node-2-private-ip>`, etc. with actual IPs from the kOps cluster
+  - Replace `<worker-node-1-private-ip>`, etc. with actual worker node IPs
+
+- Configure SSH access in `ansible/ansible.cfg`:
+  - Set the SSH private key path
+  - Configure bastion/jump host if needed for private network access
+  - Set the SSH user (usually `admin` for Ubuntu-based AMIs)
+
+- Run the Ansible playbook:
+
+```bash
+ansible-playbook -i ansible/inventory/prod.yml ansible/playbooks/site.yml
+```
+
+This applies the `common` role (base system updates, package installation, etc.) to all host groups. Monitor the output for any configuration errors.
+
+### 7. Provision the database
 
 File: `scripts/database.sh`
 
@@ -125,7 +181,7 @@ cd scripts
 ./database.sh
 ```
 
-### 6. Deploy Kubernetes services and application manifests
+### 8. Deploy Kubernetes services and application manifests
 
 File: `scripts/kubernetes.sh`
 
@@ -147,7 +203,7 @@ kubectl get svc -n ingress-nginx
 kubectl get ingress
 ```
 
-### 7. Configure Route53 and traffic routing
+### 9. Configure Route53 and traffic routing
 
 File: `scripts/routing.sh`
 
@@ -182,7 +238,7 @@ cd scripts
 kubectl apply -f k8s/routing.yaml
 ```
 
-### 8. Validate the deployment
+### 10. Validate the deployment
 
 - Confirm the application endpoints are available:
   - `https://taskapp.<your-domain>`
@@ -190,7 +246,7 @@ kubectl apply -f k8s/routing.yaml
 - Confirm certificate issuance and HTTPS routing.
 - Ensure backend pods have successfully started and are healthy.
 
-### 9. Teardown and cleanup
+### 11. Teardown and cleanup
 
 File: `scripts/cleanup.sh`
 

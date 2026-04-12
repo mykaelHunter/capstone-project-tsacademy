@@ -63,8 +63,7 @@ The Kubernetes ingress manifest in `k8s/routing.yaml` routes user traffic:
 
 ## Kubernetes Application Topology
 
-The application is deployed using Kubernetes manifests in `k8s/`:
-
+The application is deployed using Kubernetes manifests in `k8s/`:n
 - `frontendDeployment.yaml`
   - React frontend deployment and service
   - 3 replicas
@@ -87,6 +86,46 @@ The application is deployed using Kubernetes manifests in `k8s/`:
 - `secretStore-perm.yaml`
   - Permission manifest for the secrets provider
 
+## Container Image Building
+
+The application consists of two containerized components defined in the `src/` directory:
+
+### Backend Container (taskapp_backend)
+
+The backend Dockerfile (`src/taskapp_backend/Dockerfile`) uses a multi-stage build approach:
+
+- **Builder Stage**: Uses `python:3.11-alpine` as the base, installs build dependencies (gcc, musl-dev, postgresql-dev, libffi-dev, build-base), and compiles all Python dependencies from `requirements.txt` into `/root/.local`
+- **Runtime Stage**: Uses `python:3.11-alpine` as the slim base, copies only the compiled packages from the builder stage, and includes runtime-only dependencies (netcat-openbsd for the entrypoint script, libpq for PostgreSQL connectivity)
+- **Security**: Runs as a non-privileged user (`appuser`) to prevent unauthorized container escapes
+- **Entry**: Uses `docker-entrypoint.sh` to manage database migration and service startup
+
+### Frontend Container (taskapp_frontend)
+
+The frontend Dockerfile (`src/taskapp_frontend/Dockerfile`) employs a two-stage production build:
+
+- **Builder Stage**: Uses `node:24-alpine`, installs npm dependencies with `npm ci --frozen-lockfile`, builds the Vite TypeScript React application, and produces optimized artifacts in `/app/dist`
+- **Runtime Stage**: Uses `nginx:alpine` as the lightweight server, copies the built assets to `/usr/share/nginx/html`, and configures NGINX via `nginx.conf` for serving single-page application routes
+- **Configuration**: The environment variable `VITE_API_URL` is set during build to point the frontend to the correct backend API endpoint (e.g., `https://api.terra-hunter.com/api`)
+
+### Image Registry Integration
+
+Build images using Docker and push them to a public or private container registry (e.g., Docker Hub, Amazon ECR, private registry):
+
+```bash
+# Backend
+cd src/taskapp_backend
+docker build -t <registry>/taskapp-backend:<version> .
+docker push <registry>/taskapp-backend:<version>
+
+# Frontend
+cd src/taskapp_frontend
+docker build -t <registry>/taskapp-frontend:<version> .
+docker push <registry>/taskapp-frontend:<version>
+```
+
+The Kubernetes deployment manifests reference these images by URI, and the kubelet automatically pulls them during pod provisioning.
+
+
 ## Networking Architecture
 
 The networking design includes:
@@ -97,8 +136,6 @@ The networking design includes:
 - Route53 DNS records for frontend and API endpoints
 - The cluster configured with private topology via kOps
 
-## Security Design
-
 The architecture emphasizes cloud-native security principles:
 
 - Least-privilege IAM roles for kOps and AWS operations
@@ -106,6 +143,37 @@ The architecture emphasizes cloud-native security principles:
 - TLS termination through cert-manager and NGINX ingress
 - Secret retrieval using AWS Secrets Store CSI rather than hardcoded values
 - Remote Terraform state with locking to prevent concurrent drift
+- Lightweight container images constructed with multi-stage Docker builds to minimize attack surface
+
+## Configuration Management with Ansible
+
+The `ansible/` directory provides optional configuration management for cluster nodes deployed via kOps:
+
+### Structure
+
+- **Inventory** (`ansible/inventory/prod.yml`): Defines host groups for control plane and worker nodes by private IP address
+- **Group Variables** (`ansible/inventory/group_vars/private_nodes.yml`): Shared configuration variables for all private cluster nodes
+- **Playbook** (`ansible/playbooks/site.yml`): Main orchestration playbook applying the `common` role to all hosts
+- **Common Role** (`ansible/roles/common/tasks/`): Reusable tasks for base system configuration (apt cache updates, security patches, monitoring agents, etc.)
+
+### Integration with kOps Cluster
+
+After kOps provisions the Kubernetes cluster, Ansible can be used for:
+
+1. **Node Configuration**: Apply security hardening, kernel tuning, and system updates across all nodes
+2. **Post-Deployment Setup**: Install monitoring agents, configure log forwarding, or deploy additional tools
+3. **Runtime Management**: Manage configurations without modifying Kubernetes manifests
+
+### Usage
+
+1. Populate `ansible/inventory/prod.yml` with private IP addresses of control plane and worker nodes from kOps
+2. Edit `ansible/ansible.cfg` to configure SSH access (bastion host if needed, SSH key, username)
+3. Run the main playbook:
+   ```bash
+   ansible-playbook -i ansible/inventory/prod.yml ansible/playbooks/site.yml
+   ```
+
+The playbook uses become (sudo) privileges to apply system-level changes. Ensure SSH user has passwordless sudo configured or provide the `-K` flag for password prompting.
 
 ## Deployment Flow
 

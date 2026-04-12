@@ -28,7 +28,8 @@ The goal is to build a highly available, secure, scalable cluster with automated
 - Kubernetes operations using kOps and cluster validation
 - Cloud-native security via private networking, IAM, and secret management
 - DNS delegation and SSL termination with Route53 and cert-manager
-- Configuration management support via Ansible scaffolding
+- Configuration management via Ansible for cluster nodes
+- Docker multi-stage builds for optimized container images
 
 ## Architecture Summary
 
@@ -55,26 +56,75 @@ The goal is to build a highly available, secure, scalable cluster with automated
 
 ## Project Structure
 
-- `ansible/` - optional playbooks and configuration for node management
-- `docs/` - runbook and documentation for deployment steps
+- `ansible/` - Ansible playbooks and roles for cluster node configuration and management
+- `docs/` - runbook and architecture documentation for deployment steps
 - `k8s/` - Kubernetes manifests for application deployment
 - `kops/` - kOps configuration and AWS-specific Terraform for RDS and DNS
 - `terraform/` - modular AWS infrastructure code
 - `scripts/` - deployment and cleanup automation
 - `misc/` - Terraform backend configuration asset
+- `src/taskapp_backend/` - Flask backend application with multi-stage production Dockerfile
+- `src/taskapp_frontend/` - React frontend application with Node.js and nginx multi-stage Dockerfile
 
 ## Deployment Quickstart
 
 1. Review `docs/runbook.md` for the authoritative deployment order.
-2. Optionally run `scripts/iam-kops.sh` after replacing placeholders.
-3. Run `scripts/terraform-setup.sh` to provision the core AWS infrastructure.
-4. Update `scripts/kops-setup.sh` with the VPC ID, subnet IDs, and domain configuration.
-5. Run `scripts/kops-setup.sh` to generate `cluster-config.yaml`.
-6. Run `scripts/kops-start.sh` to create and validate the Kubernetes cluster.
-7. Run `scripts/database.sh` to provision the RDS PostgreSQL database.
-8. Run `scripts/kubernetes.sh` to install ingress, cert-manager, CSI, and deploy app manifests.
-9. Run `scripts/routing.sh` to create Route53 records and enable HTTPS routing.
-10. Use `scripts/cleanup.sh` for teardown and resource cleanup.
+2. Build and push Docker images from the `src/` directory to your container registry.
+3. Optionally run `scripts/iam-kops.sh` after replacing placeholders.
+4. Run `scripts/terraform-setup.sh` to provision the core AWS infrastructure.
+5. Update `scripts/kops-setup.sh` with the VPC ID, subnet IDs, and domain configuration.
+6. Run `scripts/kops-setup.sh` to generate `cluster-config.yaml`.
+7. Run `scripts/kops-start.sh` to create and validate the Kubernetes cluster.
+8. Run `scripts/database.sh` to provision the RDS PostgreSQL database.
+9. Use Ansible playbooks in `ansible/` to configure cluster nodes and perform post-deployment tasks.
+10. Run `scripts/kubernetes.sh` to install ingress, cert-manager, CSI, and deploy app manifests.
+11. Run `scripts/routing.sh` to create Route53 records and enable HTTPS routing.
+12. Use `scripts/cleanup.sh` for teardown and resource cleanup.
+
+## Building Docker Images
+
+Before deploying to Kubernetes, build and push container images from the application source:
+
+### Backend Image (Flask API)
+
+```bash
+cd src/taskapp_backend
+docker build -t <registry>/<project>/taskapp-backend:<tag> .
+docker push <registry>/<project>/taskapp-backend:<tag>
+```
+
+The backend Dockerfile uses a two-stage build process:
+- **Stage 1 (Builder)**: Uses Python 3.11-alpine, installs build dependencies and pip packages into a temporary directory
+- **Stage 2 (Runtime)**: Copies only the built packages and application code, removes build dependencies, and runs as a non-privileged user
+
+### Frontend Image (React + NGINX)
+
+```bash
+cd src/taskapp_frontend
+docker build -t <registry>/<project>/taskapp-frontend:<tag> .
+docker push <registry>/<project>/taskapp-frontend:<tag>
+```
+
+The frontend Dockerfile uses a two-stage build process:
+- **Stage 1 (Builder)**: Uses Node.js 24-alpine, installs dependencies, and builds the Vite application
+- **Stage 2 (Runtime)**: Uses nginx:alpine, copies the optimized build artifacts, and serves them via NGINX
+
+After building images, update the `BACKEND_IMG` and `FRONTEND_IMG` variables in `scripts/kubernetes.sh` with your pushed image URIs.
+
+## Ansible Configuration Management
+
+The `ansible/` directory contains playbooks for configuring cluster nodes after provisioning:
+
+- **Inventory**: `ansible/inventory/prod.yml` - Define control plane and worker node hosts by their private IPs
+- **Playbook**: `ansible/playbooks/site.yml` - Main playbook that applies the `common` role
+- **Common Role**: `ansible/roles/common/tasks/main.yml` - Base configuration tasks (apt updates, package installation, etc.)
+
+To use Ansible for cluster configuration:
+
+1. Update `ansible/inventory/prod.yml` with the private IPs of your control plane and worker nodes from the kOps cluster
+2. Ensure SSH access via bastion or VPN to the private cluster nodes
+3. Configure `ansible/ansible.cfg` with appropriate settings (bastion host, SSH key, user)
+4. Run the playbook: `ansible-playbook -i ansible/inventory/prod.yml ansible/playbooks/site.yml`
 
 ## Required Manual Edits
 
