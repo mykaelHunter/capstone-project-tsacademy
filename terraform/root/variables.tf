@@ -47,9 +47,8 @@ variable "limit_amount" {
 }
 
 variable "subscriber_emails" {
-  description = "List of email addresses to receive notifications"
+  description = "List of email addresses to receive notifications in a list of strings"
   type        = list(string)
-  default   = ["msilas007@gmail.com"]
 }
 
 variable "threshold" {

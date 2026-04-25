@@ -78,6 +78,7 @@ This script creates a `kops` IAM group and attaches the required AWS policies fo
 File: `scripts/terraform-setup.sh`
 
 - Ensure you have a project name, it will define most of the variable names
+- Ensure you provide your email(s) in a list of string format eg `["name@example.com"]`
 
 - Run:
 
